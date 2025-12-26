@@ -1,21 +1,17 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import Dict, Any
-from generator import generate_response
 import os
 from dotenv import load_dotenv
 import psycopg2
-from tabulate import tabulate  # optional for nice table display
+import json
+from decimal import Decimal
+from generator import generate_response
 
 load_dotenv()
 
 app = FastAPI()
 
-# --- Request models ---
-class MetadataRequest(BaseModel):
-    message: str
-    metadata: Dict[str, Any] | None = None
-
+# --- Request model ---
 class ChatRequest(BaseModel):
     phone: str
     message: str
@@ -30,66 +26,56 @@ def get_db_connection():
         port=os.getenv("DB_PORT")
     )
 
-# --- Function to print users ---
-def print_users_in_terminal():
+# --- Startup: print all users and balances ---
+def print_users_and_balances():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        # Print a single user by phone number (example: '0783857284')
         phone = os.getenv("PRINT_USER_PHONE", "0783857284")
-        cur.execute("SELECT name, phone_number FROM users WHERE phone_number = %s;", (phone,))
-        user_row = cur.fetchone()
-        balance = None
-        if user_row:
-            # Try to get balance from formairtime_balance
-            try:
-                conn2 = get_db_connection()
-                cur2 = conn2.cursor()
-                cur2.execute("SELECT balance FROM airtime_balance WHERE phone_number = %s;", (phone,))
-                balance_row = cur2.fetchone()
-                if balance_row:
-                    balance = balance_row[0]
-                cur2.close()
-                conn2.close()
-            except Exception as e:
-                print(f"Error fetching balance: {e}")
+        cur.execute("""
+            SELECT u.phone_number, u.name, COALESCE(a.balance, 0) AS airtime_balance
+            FROM users u
+            LEFT JOIN airtime_balance a ON u.phone_number = a.phone_number
+            WHERE u.phone_number = %s;
+        """, (phone,))
+        row = cur.fetchone()
+        colnames = [desc[0] for desc in cur.description]
         cur.close()
         conn.close()
-        print("\n--- User data (JSON) ---")
-        import json
-        if user_row:
-            # Convert Decimal to float for JSON serialization
-            if balance is not None:
-                try:
-                    balance_json = float(balance)
-                except Exception:
-                    balance_json = str(balance)
-            else:
-                balance_json = None
-            print(json.dumps({"name": user_row[0], "phone_number": user_row[1], "balance": balance_json}, indent=4))
+
+        # Convert Decimal → float
+        if row:
+            row_dict = dict(zip(colnames, row))
+            if isinstance(row_dict.get("airtime_balance"), Decimal):
+                row_dict["airtime_balance"] = float(row_dict["airtime_balance"])
+            print("\n--- User with Airtime Balance ---")
+            print(json.dumps(row_dict, indent=4))
         else:
-            print(json.dumps({"error": "User not found", "phone_number": phone}, indent=4))
+            print(f"No user found with phone number {phone}")
+        print("------------------------\n")
         print("------------------------\n")
 
     except Exception as e:
-        print(f"Error fetching users: {e}")
+        print(f"Error fetching users and balances: {e}")
 
-# --- Startup event to print users ---
 @app.on_event("startup")
 async def startup_event():
-    print_users_in_terminal()
+    print_users_and_balances()
 
-# --- Endpoints ---
+# --- Root endpoint ---
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Send POST /chat with JSON {\"message\": ..., \"metadata\": {...}}"}
+    return {
+        "status": "ok",
+        "message": "Send POST /chat with JSON {\"phone\": ..., \"message\": ...}"
+    }
 
-
-# --- Helper to get user data by phone ---
-def get_user_by_phone(phone):
+# --- Helper: get user info and balance by phone ---
+def get_user_by_phone_with_balance(phone: str):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
+
         cur.execute("SELECT name, phone_number FROM users WHERE phone_number = %s;", (phone,))
         user_row = cur.fetchone()
         # Get balance from airtime_balance
@@ -101,24 +87,35 @@ def get_user_by_phone(phone):
             return {
                 "name": user_row[0],
                 "phone_number": user_row[1],
-                "balance": balance_row[0] if balance_row else None
+                "balance": float(balance_row[0]) if balance_row and balance_row[0] is not None else 0.0
             }
         return None
     except Exception as e:
         print(f"Error fetching user or balance: {e}")
         return None
 
+# --- Chat endpoint ---
 @app.post("/chat")
 async def chat(req: ChatRequest):
-    user_data = get_user_by_phone(req.phone)
+    user_data = get_user_by_phone_with_balance(req.phone)
     if not user_data:
         raise HTTPException(status_code=404, detail="User not found")
     try:
-        # Pass both message and user data to the AI
-        reply = generate_response({
-            "message": req.message,
-            "user": user_data
-        })
+        # Build prompt including actual balance
+        prompt_message = (
+            f"You are an assistant. Answer the user's question using ONLY the information below.\n\n"
+            f"User Info:\n"
+            f"- Name: {user_data['name']}\n"
+            f"- Phone: {user_data['phone_number']}\n"
+            f"- Airtime Balance: {user_data['balance']}\n\n"
+            f"Question: {req.message}\n\n"
+            f"Respond concisely using the values above directly."
+        )
+
+        # Only return AI-generated reply
+        reply = generate_response({"message": prompt_message})
+
         return {"reply": reply}
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"generation error: {e}")
