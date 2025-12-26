@@ -13,11 +13,16 @@ def generate_response(metadata):
 	message = metadata.get("message", "Hello!")
 	user = metadata.get("user", {})
 	system_prompt = """
-You are an AI assistant. Always respond in English. You have access to the following user data:
-Name: {name}
-Phone: {phone_number}
-If the user asks 'who am I', reply with 'you are {name}' based on the user data. If the user asks anything else, use the user data to provide relevant information if possible.
-""".format(name=user.get("name", "Unknown"), phone_number=user.get("phone_number", "Unknown"))
+	You are an AI assistant. Always respond in English. You have access to the following user data:
+	Name: {name}
+	Phone: {phone_number}
+	Balance: {balance}
+	If the user asks 'who am I', reply with 'you are {name}' based on the user data. If the user asks about their balance, reply with the actual balance from the user data. For other questions, use the user data to provide relevant information if possible.
+	""".format(
+		name=user.get("name", "Unknown"),
+		phone_number=user.get("phone_number", "Unknown"),
+		balance=user.get("balance", "Unknown")
+	)
 	completion = client.chat.completions.create(
 		model="deepseek-ai/DeepSeek-V3.2:novita",
 		messages=[

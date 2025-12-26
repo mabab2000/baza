@@ -35,17 +35,40 @@ def print_users_in_terminal():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("SELECT * FROM users;")
-        rows = cur.fetchall()
-        colnames = [desc[0] for desc in cur.description]
+        # Print a single user by phone number (example: '0783857284')
+        phone = os.getenv("PRINT_USER_PHONE", "0783857284")
+        cur.execute("SELECT name, phone_number FROM users WHERE phone_number = %s;", (phone,))
+        user_row = cur.fetchone()
+        balance = None
+        if user_row:
+            # Try to get balance from formairtime_balance
+            try:
+                conn2 = get_db_connection()
+                cur2 = conn2.cursor()
+                cur2.execute("SELECT balance FROM airtime_balance WHERE phone_number = %s;", (phone,))
+                balance_row = cur2.fetchone()
+                if balance_row:
+                    balance = balance_row[0]
+                cur2.close()
+                conn2.close()
+            except Exception as e:
+                print(f"Error fetching balance: {e}")
         cur.close()
         conn.close()
-
-        # Print users as JSON in terminal
-        users_json = [dict(zip(colnames, row)) for row in rows]
-        print("\n--- Users data (JSON) ---")
+        print("\n--- User data (JSON) ---")
         import json
-        print(json.dumps(users_json, indent=4))
+        if user_row:
+            # Convert Decimal to float for JSON serialization
+            if balance is not None:
+                try:
+                    balance_json = float(balance)
+                except Exception:
+                    balance_json = str(balance)
+            else:
+                balance_json = None
+            print(json.dumps({"name": user_row[0], "phone_number": user_row[1], "balance": balance_json}, indent=4))
+        else:
+            print(json.dumps({"error": "User not found", "phone_number": phone}, indent=4))
         print("------------------------\n")
 
     except Exception as e:
@@ -68,14 +91,21 @@ def get_user_by_phone(phone):
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("SELECT name, phone_number FROM users WHERE phone_number = %s;", (phone,))
-        row = cur.fetchone()
+        user_row = cur.fetchone()
+        # Get balance from airtime_balance
+        cur.execute("SELECT balance FROM airtime_balance WHERE phone_number = %s;", (phone,))
+        balance_row = cur.fetchone()
         cur.close()
         conn.close()
-        if row:
-            return {"name": row[0], "phone_number": row[1]}
+        if user_row:
+            return {
+                "name": user_row[0],
+                "phone_number": user_row[1],
+                "balance": balance_row[0] if balance_row else None
+            }
         return None
     except Exception as e:
-        print(f"Error fetching user: {e}")
+        print(f"Error fetching user or balance: {e}")
         return None
 
 @app.post("/chat")
