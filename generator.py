@@ -9,12 +9,19 @@ client = OpenAI(
 	api_key=os.environ["DEEPSEEK_API_KEY"],
 )
 def generate_response(metadata):
-	# Expecting metadata to have a 'message' key
+	# metadata should have 'message' and 'user' keys
 	message = metadata.get("message", "Hello!")
+	user = metadata.get("user", {})
+	system_prompt = """
+You are an AI assistant. Always respond in English. You have access to the following user data:
+Name: {name}
+Phone: {phone_number}
+If the user asks 'who am I', reply with 'you are {name}' based on the user data. If the user asks anything else, use the user data to provide relevant information if possible.
+""".format(name=user.get("name", "Unknown"), phone_number=user.get("phone_number", "Unknown"))
 	completion = client.chat.completions.create(
 		model="deepseek-ai/DeepSeek-V3.2:novita",
 		messages=[
-			{"role": "system", "content": "You are an AI assistant. Always respond in English."},
+			{"role": "system", "content": system_prompt},
 			{"role": "user", "content": message}
 		],
 	)

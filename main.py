@@ -17,6 +17,7 @@ class MetadataRequest(BaseModel):
     metadata: Dict[str, Any] | None = None
 
 class ChatRequest(BaseModel):
+    phone: str
     message: str
 
 # --- Database connection helper ---
@@ -40,10 +41,12 @@ def print_users_in_terminal():
         cur.close()
         conn.close()
 
-        # Print nicely in terminal
-        print("\n--- Users table ---")
-        print(tabulate(rows, headers=colnames, tablefmt="psql"))
-        print("-------------------\n")
+        # Print users as JSON in terminal
+        users_json = [dict(zip(colnames, row)) for row in rows]
+        print("\n--- Users data (JSON) ---")
+        import json
+        print(json.dumps(users_json, indent=4))
+        print("------------------------\n")
 
     except Exception as e:
         print(f"Error fetching users: {e}")
@@ -58,10 +61,34 @@ async def startup_event():
 async def root():
     return {"status": "ok", "message": "Send POST /chat with JSON {\"message\": ..., \"metadata\": {...}}"}
 
+
+# --- Helper to get user data by phone ---
+def get_user_by_phone(phone):
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT name, phone_number FROM users WHERE phone_number = %s;", (phone,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if row:
+            return {"name": row[0], "phone_number": row[1]}
+        return None
+    except Exception as e:
+        print(f"Error fetching user: {e}")
+        return None
+
 @app.post("/chat")
 async def chat(req: ChatRequest):
+    user_data = get_user_by_phone(req.phone)
+    if not user_data:
+        raise HTTPException(status_code=404, detail="User not found")
     try:
-        reply = generate_response({"message": req.message})
+        # Pass both message and user data to the AI
+        reply = generate_response({
+            "message": req.message,
+            "user": user_data
+        })
         return {"reply": reply}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"generation error: {e}")
